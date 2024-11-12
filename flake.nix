@@ -8,76 +8,62 @@
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
+    flake-parts = {
+      url = "github:hercules-ci/flake-parts";
+      inputs.nixpkgs-lib.follows = "nixpkgs";
+    };
   };
 
-  outputs = {nixpkgs, ...}: let
-    inherit (nixpkgs) lib;
+  outputs = inputs:
+    inputs.flake-parts.lib.mkFlake {inherit inputs;} {
+      systems = [
+        "aarch64-darwin"
+        "aarch64-linux"
+        "i686-linux"
+        "x86_64-darwin"
+        "x86_64-linux"
+      ];
 
-    linux32BitSystems = ["i686-linux"];
-    linux64BitSystems = ["x86_64-linux" "aarch64-linux"];
-    linuxSystems = linux32BitSystems ++ linux64BitSystems;
-    darwinSystems = ["x86_64-darwin" "aarch64-darwin"];
-    systems = linuxSystems ++ darwinSystems;
-
-    forAllSystems = lib.genAttrs systems;
-
-    pkgsFor = lib.genAttrs systems (system: nixpkgs.legacyPackages.${system});
-
-    mkLib = pkgs:
-      import ./lib {
-        inherit (pkgs) lib newScope;
+      flake = {
+        overlays.default = _final: _prev: {};
+        templates = rec {
+          default = quick-start;
+          quick-start = {
+            description = "A Typst project";
+            path = ./examples/quick-start;
+          };
+        };
       };
 
-    mkReleaseScript = pkgs:
-      import ./release.nix {
-        inherit pkgs;
-      };
-  in {
-    inherit mkLib;
+      perSystem = {
+        pkgs,
+        lib,
+        ...
+      }: let
+        mkReleaseScript = pkgs.callPackage ./release.nix {};
+      in {
+        formatter = pkgs.alejandra;
 
-    overlays.default = _final: _prev: {};
+        # TODO: Write checks
+        #checks = import ./checks { inherit pkgs; myLib = typstLib; };
 
-    templates = rec {
-      default = quick-start;
-      quick-start = {
-        description = "A Typst project";
-        path = ./examples/quick-start;
+        packages = pkgs.callPackage ./pkgs.nix {};
+
+        apps = {
+          release = {
+            type = "app";
+            program = lib.getExe mkReleaseScript;
+          };
+        };
+
+        devShells.default = pkgs.mkShell {
+          nativeBuildInputs = with pkgs; [
+            alejandra
+            markdownlint-cli
+            mdbook
+            nodePackages.prettier
+          ];
+        };
       };
     };
-
-    checks = forAllSystems (system: let
-      pkgs = pkgsFor.${system};
-    in (pkgs.callPackages ./checks {
-      inherit pkgs;
-      myLib = mkLib pkgs;
-    }));
-
-    lib = forAllSystems (system: mkLib pkgsFor.${system});
-
-    packages = forAllSystems (system: (
-      import ./pkgs.nix {pkgs = pkgsFor.${system};}
-    ));
-
-    apps = forAllSystems (system: {
-      release = {
-        type = "app";
-        program = lib.getExe (mkReleaseScript pkgsFor.${system});
-      };
-    });
-
-    formatter = forAllSystems (system: pkgsFor.${system}.alejandra);
-
-    devShells = forAllSystems (system: let
-      pkgs = pkgsFor.${system};
-    in {
-      default = pkgs.mkShell {
-        nativeBuildInputs = with pkgs; [
-          alejandra
-          markdownlint-cli
-          mdbook
-          nodePackages.prettier
-        ];
-      };
-    });
-  };
 }
